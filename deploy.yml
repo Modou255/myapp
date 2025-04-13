@@ -1,0 +1,79 @@
+---
+- name: Deploy Node.js Application
+  hosts: app_servers
+  become: yes
+  vars_files:
+    - group_vars/all/vault.yml  # Fichier chiffré avec Ansible Vault pour les secrets
+  
+  tasks:
+    - name: Install Node.js and npm
+      block:
+        - name: Add NodeSource repository key
+          apt_key:
+            url: "https://deb.nodesource.com/gpgkey/nodesource.gpg.key"
+            state: present
+        
+        - name: Add NodeSource repository
+          apt_repository:
+            repo: "deb https://deb.nodesource.com/node_{{ node_version }} {{ ansible_distribution_release }} main"
+            state: present
+            filename: nodesource
+        
+        - name: Install Node.js and npm
+          apt:
+            name: ["nodejs"]
+            state: present
+            update_cache: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: Install PM2 process manager (globally)
+      npm:
+        name: pm2
+        global: yes
+        
+    - name: Ensure deploy directory exists
+      file:
+        path: "{{ deploy_dir }}"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        
+    - name: Clone or update repository
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ deploy_dir }}"
+        version: main
+        force: yes
+      register: git_result
+      notify:
+        - Install dependencies
+        - Restart app
+        
+    - name: Install dependencies (initial)
+      npm:
+        path: "{{ deploy_dir }}"
+        state: present
+      when: git_result.changed
+      notify: Restart app
+        
+    - name: Ensure app is running with PM2
+      pm2:
+        name: myapp
+        script: "{{ deploy_dir }}/app.js"
+        state: present
+      register: pm2_status
+      
+    - name: Get app status
+      debug:
+        var: pm2_status
+        
+  handlers:
+    - name: Install dependencies
+      npm:
+        path: "{{ deploy_dir }}"
+        state: present
+        
+    - name: Restart app
+      pm2:
+        name: myapp
+        state: restarted
